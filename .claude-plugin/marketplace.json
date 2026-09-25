@@ -1,0 +1,15 @@
+{
+  "name": "clumsyknight-clean-guard",
+  "owner": {
+    "name": "Clumsyknight",
+    "email": "clusmsyknight@gmail.com"
+  },
+  "description": "Keep AI-tool traces out of the branches you ship.",
+  "plugins": [
+    {
+      "name": "clean-guard",
+      "source": "./",
+      "description": "Git hooks plus a Claude hook that keep AI-tool traces out of commits on the branches and remotes you choose."
+    }
+  ]
+}

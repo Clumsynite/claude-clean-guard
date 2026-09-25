@@ -1,0 +1,11 @@
+# Example ~/.config/clean-guard/config (git-config format). Optional.
+# clean-guard reads it at session start to suggest a decision for repos that don't have one yet.
+# Every key is multi-valued and takes shell globs.
+
+[hint]
+	# Remotes that are yours alone: repos whose remotes all match are suggested "untrack".
+	personalRemote = *github.com*your-user/*
+	# Remotes that ship to a client or employer: a match suggests "track".
+	cleanRemote = *git.client.example*
+	# Working directories where clean-guard stays silent.
+	ignorePath = */scratch/*

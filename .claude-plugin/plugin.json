@@ -1,0 +1,21 @@
+{
+  "name": "clean-guard",
+  "version": "0.1.0",
+  "description": "Keep AI-tool traces out of the branches you ship: git hooks strip attribution trailers and block pushes that carry AI-tool traces, a Claude hook stops the agent bypassing them, and scan --history audits a whole repo. Zero tokens in untracked repos.",
+  "author": {
+    "name": "Clumsyknight",
+    "email": "clusmsyknight@gmail.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Clumsynite/claude-clean-guard",
+  "repository": "https://github.com/Clumsynite/claude-clean-guard",
+  "keywords": [
+    "git",
+    "hooks",
+    "attribution",
+    "co-authored-by",
+    "clean-history",
+    "pre-push",
+    "commit-msg"
+  ]
+}

@@ -1,0 +1,58 @@
+name: Release
+
+# Releases are built by CI/CD: bump "version" in .claude-plugin/plugin.json and push to main.
+# When CI passes on that push, this creates the tag <name>--v<version> and a GitHub release
+# at the tested commit. If that release already exists, it does nothing.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+      - name: Read version
+        id: v
+        run: |
+          name=$(jq -r .name .claude-plugin/plugin.json)
+          version=$(jq -r .version .claude-plugin/plugin.json)
+          echo "$name" | grep -Eq '^[a-z0-9][a-z0-9-]*$' \
+            || { echo "::error::plugin.json name '$name' is not kebab-case"; exit 1; }
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::plugin.json version '$version' is not x.y.z"; exit 1; }
+          {
+            echo "tag=$name--v$version"
+            echo "title=$name $version"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create the release if it doesn't exist
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+          TITLE: ${{ steps.v.outputs.title }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+          else
+            gh release create "$TAG" --target "$SHA" --generate-notes --title "$TITLE"
+            echo "Created release $TAG at $SHA."
+          fi
