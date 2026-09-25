@@ -19,7 +19,7 @@ The decision is **per repo, and within a repo per branch and remote**. A repo ca
 
 ## Token cost
 
-Zero in untracked repos and outside git. In a tracked repo, a session starts with a short summary of the rules (about 90 words). In a repo with no decision yet, the session gets a short note asking Claude to raise the question with you once.
+Zero in untracked repos and outside git. In a tracked repo, a session starts with a short summary of the rules (about 130 words): no AI traces, comments kept short and about why, and no narration of the change. In a repo with no decision yet, the session gets a short note asking Claude to raise the question with you once.
 
 ## Requirements
 
@@ -80,7 +80,8 @@ The decision file is git-config format. Read it with `clean-guard status` or `cl
 	remote = client-remote        # remote name, repeatable
 	url = *git.client.example*    # glob matched against the push URL, repeatable
 [rules]
-	strict = true                 # also block test files and any Co-Authored-By; warn on dates, hashes, IPs
+	strict = true                 # also block test files, any Co-Authored-By and 2+ line comments; warn on dates, hashes, IPs
+	maxCommentLines = 3           # longest run of added comment lines (default 3, or 1 in strict mode; 0 = off)
 	stripTrailers = true          # commit-msg removes attribution lines instead of blocking (default true)
 	noForcePush = true            # block non-fast-forward pushes and ref deletes in scope (default true)
 	noSharedHistoryWith = main    # block a pushed tip that shares any commit with this ref, repeatable
@@ -110,6 +111,8 @@ Lines are lowercased and matched as POSIX ERE. Targets: `msg` (commit message li
 | notes-file | block | path | `handoff*.md`, `plan.md`, `plans/`, `pickup*.md`, `*-plan.md` |
 | test-file | block (strict only) | path | `test/`, `tests/`, `__tests__/`, `e2e/`, `spec/`, `*.test.*`, `*.spec.*`, `test_*.py`, `*_test.go`, `*_test.py` |
 | process-words | warn | msg, comment | "as discussed", "this session", "the agent added", "used to be", "previously was" and similar |
+| slop-words | warn | msg, comment | narration of the change: "as requested", "for clarity", "it's worth noting"; in comments also "this change", "now handles", "updated to", "note that" |
+| comment-wall | warn (block in strict) | comment | more than `rules.maxCommentLines` consecutive added comment lines with text in them (lines holding only `/**`, `*/` and the like don't count) |
 | history-refs | warn (strict only) | msg, comment | ISO dates, commit hashes that resolve in the repo, `ticket #`, IPv4 addresses |
 | odd-ident | warn | ident | `root@…`, `@localhost`, `.local`/`.lan` emails, emails with no dot in the domain |
 

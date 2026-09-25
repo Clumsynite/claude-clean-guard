@@ -107,8 +107,12 @@ prep_rules() {
 	: > "$T/hex.txt"
 	STRICT=0
 	EXCL=
+	MAXC=3
+	WALLSEV=warn
 	[ -f "$DF" ] || return 0
-	if dbool rules.strict false; then STRICT=1; fi
+	if dbool rules.strict false; then STRICT=1 MAXC=1 WALLSEV=block; fi
+	v=$(dget rules.maxCommentLines)
+	case $v in '') ;; *[!0-9]*) die "rules.maxCommentLines must be a number (0 turns the check off)" ;; *) MAXC=$v ;; esac
 	dall rules.extra > "$T/extra.txt"
 	LC_ALL=C "$AWK" -v mode=extra -f "$SCAN_AWK" kind=extra "$T/extra.txt" >> "$T/rules.tsv" || die "fix rules.extra in $DF"
 	dall allow.pattern > "$T/allow.txt"
@@ -170,7 +174,7 @@ prep_hex() {
 # Runs the matcher; returns 0 (clean or warnings), 1 (blocks) or exits 2.
 run_matcher() {
 	LC_ALL=C "$AWK" -v mode=scan -v strict="$STRICT" -v all="${ALL:-0}" -v json="${JSON:-0}" \
-		-v quiet="${QUIET:-0}" -v history="${HIST:-0}" -f "$SCAN_AWK" \
+		-v quiet="${QUIET:-0}" -v history="${HIST:-0}" -v maxc="$MAXC" -v wallsev="$WALLSEV" -f "$SCAN_AWK" \
 		kind=rules "$T/rules.tsv" kind=allow "$T/allow.txt" kind=allowpath "$T/allowpath.txt" \
 		kind=allowemail "$T/allowemail.txt" kind=hex "$T/hex.txt" \
 		kind="${MSGKIND:-msg}" "$T/msg" kind=path "$T/path" kind=diff "$T/diff" kind=ident "$T/ident"
@@ -785,7 +789,11 @@ tracked_context() {
 	s=
 	if dbool rules.strict false; then s=" Strict mode: also no test files, and no dates, hashes, ticket numbers or IP addresses in messages or comments."; fi
 	al=$(dall allow.pattern | paste -s -d ' ' -)
-	printf '%s' "clean-guard: this repo is tracked ($(dget guard.reason)). Scope: branches $(list_or scope.branch all); remotes $(list_or scope.remote all). On these, commits must carry no trace of AI tools: no attribution trailers or \"generated with\" lines, no AI tool names in messages or added code, no AI, plan or handoff files.$s Allow entries: ${al:-none}. Run \`clean-guard scan\` before committing on these branches. Never bypass or loosen the hooks (--no-verify, hook config, the decision file). To change the decision or scope, ask the user to run it with !."
+	mc=$(dget rules.maxCommentLines)
+	if [ -z "$mc" ]; then if [ -n "$s" ]; then mc=1; else mc=3; fi; fi
+	cl="at most $mc lines"
+	[ "$mc" = 1 ] && cl="one line"
+	printf '%s' "clean-guard: this repo is tracked ($(dget guard.reason)). Scope: branches $(list_or scope.branch all); remotes $(list_or scope.remote all). On these, commits must carry no trace of AI tools: no attribution trailers or \"generated with\" lines, no AI tool names in messages or added code, no AI, plan or handoff files.$s Code must read as if an engineer wrote it: comments are $cl and say why, not what; no narration of the change or this session (\"now handles\", \"this change\", \"as requested\", \"used to\") in code, comments or messages. Allow entries: ${al:-none}. Run \`clean-guard scan --staged\` before committing on these branches. Never bypass or loosen the hooks (--no-verify, hook config, the decision file). To change the decision or scope, ask the user to run it with !."
 }
 
 claude_session_start() {

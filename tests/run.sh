@@ -145,6 +145,20 @@ Generated with Claude Code"
 	out=$(cg scan 'HEAD^!')
 	check "$AWKNAME odd-ident" "$out" "WARN odd-ident"
 
+	# comment walls and slop words
+	fcase "comment wall of 4 warns" +comment-wall src/w1.js "$(printf '// one\n// two\n// three\n// four\nrun()')"
+	fcase "3 comment lines are fine" -comment-wall src/w2.js "$(printf '// one\n// two\n// three\nrun()')"
+	fcase "delimiter lines don't count" -comment-wall src/w3.ts "$(printf '/**\n * One line of doc.\n */\nexport const x = 1')"
+	fcase "C preprocessor lines aren't comments" -comment-wall src/w4.c "$(printf '#include <a.h>\n#include <b.h>\n#include <c.h>\n#define X 1\nint x;')"
+	fcase "Markdown headings aren't comments" -comment-wall docs/w5.md "$(printf '# a\n# b\n# c\n# d')"
+	fcase "trailing code comments aren't a wall" -comment-wall src/w6.js "$(printf 'a() // x\nb() // y\nc() // z\nd() // w')"
+	fcase "slop: this change" +slop-words src/s1.js "// This change fixes the retry"
+	fcase "slop: now handles" +slop-words src/s2.js "// Now handles empty input"
+	fcase "slop: updated to" +slop-words src/s3.py "# Updated to use the new client"
+	fcase "slop near-miss handles" -slop-words src/s4.js "// Handles empty input"
+	fcase "slop near-miss updated total" -slop-words src/s5.js "// Returns the updated total"
+	mcase "slop in a message" +slop-words "Fix the login check as requested"
+
 	# strict mode
 	git config -f "$(df)" guard.decision tracked
 	git config -f "$(df)" rules.strict true
@@ -159,6 +173,13 @@ Co-Authored-By: Jane Roe <jane@example.com>"
 	fcase "strict test-file" +test-file tests/b_test.go
 	fcase "strict spec" +test-file src/x.spec.ts
 	fcase "strict near-miss" -test-file src/testing.go
+	fcase "strict: 2 comment lines block" +comment-wall src/w7.js "$(printf '// one\n// two\nrun()')"
+	out=$(cg scan 'HEAD^!')
+	check "$AWKNAME strict comment wall is a block" "$out" "BLOCK comment-wall"
+	fcase "strict: 1 comment line is fine" -comment-wall src/w8.js "$(printf '// one\nrun()')"
+	git config -f "$(df)" rules.maxCommentLines 0
+	fcase "maxCommentLines 0 turns it off" -comment-wall src/w9.js "$(printf '// a\n// b\n// c\n// d\n// e\nrun()')"
+	git config -f "$(df)" --unset rules.maxCommentLines
 	git config -f "$(df)" --unset rules.strict
 
 	# allow entries, extras, excludes
@@ -516,6 +537,8 @@ cg init --track --branch release --remote client --reason "ships to client" --by
 out=$(ss "$R5")
 check "session-start: tracked gives the rules" "$out" "this repo is tracked \(ships to client\)"
 check "session-start: tracked names the scope" "$out" "branches release; remotes client"
+check "session-start: tracked states the comment rule" "$out" "comments are at most 3 lines and say why, not what"
+check "session-start: tracked warns against narration" "$out" "no narration of the change"
 
 U=$WORK/m5-untracked
 denies "$R5" Bash "git commit --no-verify -m x" "commit --no-verify"

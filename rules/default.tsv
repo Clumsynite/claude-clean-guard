@@ -4,6 +4,8 @@
 # Word boundaries are spelled (^|[^[:alnum:]_])word([^[:alnum:]_]|$); never \b or \<.
 # flags: strict = row only applies in strict mode; strictblock = warn normally, block in strict mode.
 # @hexref is special: a 7-40 char hex word that resolves to a commit in this repo.
+# comment-wall is built in (scan.awk): more than rules.maxCommentLines consecutive added comment lines
+# (default 3, or 1 in strict mode; 0 turns it off) is a warning, or a block in strict mode.
 attr-trailer	block	msg	-	^[ \t]*(co-authored-by|generated-by|assisted-by|x-ai-[a-z-]+):.*(claude|anthropic|chatgpt|openai|copilot|gemini|codex|aider|cursor|llm|gpt)
 attr-trailer	block	msg	-	^[ \t]*claude-session:
 attr-trailer	block	msg	-	^[ \t]*co-authored-by:.*noreply@anthropic\.com
@@ -23,6 +25,8 @@ test-file	block	path	strict	(^|/)[^/]*\.(test|spec)\.[^/]+$
 test-file	block	path	strict	(^|/)(test_[^/]*\.py|[^/]*_test\.(go|py))$
 process-words	warn	msg,comment	-	(^|[^[:alnum:]_])(as discussed|per (our|the) (session|conversation|chat)|this session|the agent (added|wrote|suggested)|ai-cleanup|ai slop)([^[:alnum:]_]|$)
 process-words	warn	msg,comment	-	(^|[^[:alnum:]_])(used to (be|do|have|return|call)|previously (was|did|used|returned))([^[:alnum:]_]|$)
+slop-words	warn	msg,comment	-	(^|[^[:alnum:]_])(as requested|as you (asked|requested)|it'?s worth noting|it is worth noting|for clarity|as mentioned (above|earlier|before))([^[:alnum:]_]|$)
+slop-words	warn	comment	-	(^|[^[:alnum:]_])(this (change|commit|fix|patch)|now (handles|supports|uses|returns|accepts)|(updated|changed|refactored|rewritten) (to|from)|note that|newly added)([^[:alnum:]_]|$)
 history-refs	warn	msg,comment	strict	(^|[^0-9])20[0-9][0-9]-[01][0-9]-[0-3][0-9]([^0-9]|$)
 history-refs	warn	msg,comment	strict	(^|[^[:alnum:]_])ticket #
 history-refs	warn	msg,comment	strict	(^|[^0-9.])[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+([^0-9.]|$)

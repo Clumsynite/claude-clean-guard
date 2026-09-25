@@ -3,6 +3,7 @@
 # Stream kinds: msg (git log %x01%H%n%B), msgfile (a commit message file), path (--name-status),
 # diff (-p -U0), ident (%x01%H then "name <email>" lines). A line starting with \001 names the commit.
 # mode: scan (default), strip (print msgfile without attribution lines), hexcand (print hex words), extra.
+# maxc/wallsev: longest allowed run of added comment lines and the severity of a longer one (0 = off).
 # Run with LC_ALL=C so matching and cutting work on bytes the same way in BWK awk, mawk and gawk.
 
 BEGIN {
@@ -60,8 +61,30 @@ function iscomment(t, f,   s) {
 	if (tolower(f) ~ /\.(md|markdown|rst|txt)$/) return 0
 	s = t
 	sub(/^[ \t]+/, "", s)
+	if (cpp(s, f)) return 0
 	if (s ~ /^(\/\/|#|\/\*|\*|--|<!--|;)/) return 1
 	return index(t, " // ") > 0 || index(t, " # ") > 0
+}
+
+# A C preprocessor line, which starts with # but isn't a comment.
+function cpp(s, f) { return s ~ /^#[ \t]*[a-z]/ && tolower(f) ~ /\.(c|h|cc|cpp|cxx|hh|hpp|m|mm)$/ }
+
+# A whole-line comment that carries text (delimiter-only lines like /**, */ or a bare // don't count).
+function wallline(t, f,   s) {
+	if (tolower(f) ~ /\.(md|markdown|rst|txt)$/) return 0
+	s = t
+	sub(/^[ \t]+/, "", s)
+	if (s !~ /^(\/\/|#|\/\*|\*|--|<!--|;)/ || s ~ /^#!/ || cpp(s, f)) return 0
+	sub(/^(\/\/+!?|#+|\/\*+!?|\*+|--+|<!--|;+)/, "", s)
+	sub(/(\*\/|-->)[ \t]*$/, "", s)
+	return s ~ /[[:alnum:]]/
+}
+
+# Reports a run of consecutive added comment lines longer than maxc (rules.maxCommentLines).
+function wallflush() {
+	if (maxc > 0 && wallrun > maxc)
+		add(wallsev, "comment-wall", "comment", wallfile, wallrun " comment lines (max " maxc "): " trim(walltext), 1)
+	wallrun = 0
 }
 
 function add(sev, id, tg, f, text, pos) {
@@ -227,16 +250,21 @@ kind == "path" {
 
 kind == "diff" {
 	c1 = substr($0, 1, 1)
-	if (c1 == "\001") { sha = substr($0, 2); inhdr = 0; next }
-	if (substr($0, 1, 5) == "diff ") { inhdr = 1; file = ""; next }
+	if (c1 == "\001") { wallflush(); sha = substr($0, 2); inhdr = 0; next }
+	if (substr($0, 1, 5) == "diff ") { wallflush(); inhdr = 1; file = ""; next }
 	if (inhdr) {
 		if (substr($0, 1, 6) == "+++ b/") file = substr($0, 7)
 		else if (substr($0, 1, 4) == "+++ ") file = ""
 		else if (substr($0, 1, 2) == "@@") inhdr = 0
 		next
 	}
+	if (c1 == "@") { wallflush(); next }
 	if (c1 != "+" || file == "" || skippath(file)) next
 	text = substr($0, 2)
+	if (wallline(text, file)) {
+		if (wallrun == 0) { wallfile = file; walltext = text }
+		wallrun++
+	} else wallflush()
 	check("add", text, file)
 	if (iscomment(text, file)) check("comment", text, file)
 	next
@@ -259,6 +287,7 @@ kind == "ident" {
 END {
 	if (mode == "extra") { if (bad) exit 2; exit 0 }
 	if (mode != "scan") exit 0
+	wallflush()
 	for (i = 1; i <= nfind; i++) {
 		cnt[fid[i]]++
 		if (!all && !json && cnt[fid[i]] > 5) { more[fid[i]]++; continue }
