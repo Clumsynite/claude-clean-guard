@@ -4,6 +4,7 @@
 # diff (-p -U0), ident (%x01%H then "name <email>" lines). A line starting with \001 names the commit.
 # mode: scan (default), strip (print msgfile without attribution lines), hexcand (print hex words), extra.
 # maxc/wallsev: longest allowed run of added comment lines and the severity of a longer one (0 = off).
+# summary=1 adds per-area counts. Diff findings carry the line number in the new file.
 # Run with LC_ALL=C so matching and cutting work on bytes the same way in BWK awk, mawk and gawk.
 
 BEGIN {
@@ -81,16 +82,55 @@ function wallline(t, f,   s) {
 }
 
 # Reports a run of consecutive added comment lines longer than maxc (rules.maxCommentLines).
-function wallflush() {
-	if (maxc > 0 && wallrun > maxc)
+function wallflush(   keep) {
+	if (maxc > 0 && wallrun > maxc) {
+		keep = curline
+		curline = wallstart
 		add(wallsev, "comment-wall", "comment", wallfile, wallrun " comment lines (max " maxc "): " trim(walltext), 1)
+		curline = keep
+	}
 	wallrun = 0
+}
+
+function isdoc(f,   l) {
+	l = tolower(f)
+	return l ~ /\.(md|markdown|rst|txt|adoc)$/ && l !~ /(^|\/)(license|licence|copying|notice|ofl)[^\/]*$/
+}
+
+# Tracks shell heredocs (text a script writes out, not comments): sets inheredoc for the lines inside one.
+function heredoc(t, f,   s) {
+	if (tolower(f) !~ /\.(sh|bash)$/) { inheredoc = 0; return }
+	if (inheredoc) {
+		s = t
+		if (hdstrip) sub(/^\t+/, "", s)
+		if (s == hdterm) { inheredoc = 0; hdend = 1 }
+		return
+	}
+	hdend = 0
+	if (t ~ /<<-?[ \t]*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?/ && t !~ /<<</ && !iscomment(t, f)) {
+		s = t
+		sub(/.*<</, "", s)
+		hdstrip = (substr(s, 1, 1) == "-")
+		sub(/^-?[ \t]*['"]?/, "", s)
+		match(s, /^[A-Za-z_][A-Za-z0-9_]*/)
+		hdterm = substr(s, 1, RLENGTH)
+		hdnext = 1
+	}
+}
+
+# Top one or two path components, for --summary.
+function area(f,   n, a) {
+	if (f == "") return "(commits)"
+	n = split(f, a, "/")
+	if (n >= 3) return a[1] "/" a[2]
+	if (n == 2) return a[1]
+	return "(root)"
 }
 
 function add(sev, id, tg, f, text, pos) {
 	nfind++
 	fsev[nfind] = sev; fid[nfind] = id; fsha[nfind] = sha; ftg[nfind] = tg
-	ffile[nfind] = f; ftext[nfind] = text; fpos[nfind] = pos
+	ffile[nfind] = f; ftext[nfind] = text; fpos[nfind] = pos; fline[nfind] = curline
 	if (sev == "block") nblock++
 	else nwarn++
 }
@@ -122,7 +162,7 @@ function stripme(text,   lc, i) {
 
 function fmt(i,   head, t, w, s, e, p, n) {
 	head = toupper(fsev[i]) " " fid[i] " " substr(fsha[i], 1, 7) " " ftg[i]
-	if (ffile[i] != "" && ftg[i] != "path") head = head " " ffile[i]
+	if (ffile[i] != "" && ftg[i] != "path") head = head " " ffile[i] (fline[i] > 0 ? ":" fline[i] : "")
 	head = head ": "
 	t = ftext[i]; p = fpos[i]
 	match(t, /^[ \t]*/)
@@ -157,7 +197,7 @@ function jesc(s,   r, i, c) {
 }
 
 function jline(i) {
-	return "{\"severity\":\"" fsev[i] "\",\"rule\":\"" jesc(fid[i]) "\",\"commit\":\"" fsha[i] "\",\"target\":\"" ftg[i] "\",\"file\":\"" jesc(ffile[i]) "\",\"text\":\"" jesc(ftext[i]) "\"}"
+	return "{\"severity\":\"" fsev[i] "\",\"rule\":\"" jesc(fid[i]) "\",\"commit\":\"" fsha[i] "\",\"target\":\"" ftg[i] "\",\"file\":\"" jesc(ffile[i]) "\",\"line\":" (fline[i] + 0) ",\"text\":\"" jesc(ftext[i]) "\"}"
 }
 
 # ---- setup kinds ----
@@ -182,7 +222,7 @@ kind == "extra" {
 	s = substr(s, length(sev) + 2)
 	tg = s; sub(/ .*/, "", tg)
 	re = substr(s, length(tg) + 2)
-	if ((sev != "block" && sev != "warn") || tg !~ /^(msg|add|comment|path|ident)(,(msg|add|comment|path|ident))*$/ || re == "") {
+	if ((sev != "block" && sev != "warn") || tg !~ /^(msg|add|comment|doc|path|ident)(,(msg|add|comment|doc|path|ident))*$/ || re == "") {
 		print "clean-guard: bad rules.extra entry (want \"<block|warn> <targets> <ERE>\"): " $0 > "/dev/stderr"
 		bad = 1
 		next
@@ -251,22 +291,38 @@ kind == "path" {
 kind == "diff" {
 	c1 = substr($0, 1, 1)
 	if (c1 == "\001") { wallflush(); sha = substr($0, 2); inhdr = 0; next }
-	if (substr($0, 1, 5) == "diff ") { wallflush(); inhdr = 1; file = ""; next }
+	if (substr($0, 1, 5) == "diff ") { wallflush(); inhdr = 1; file = ""; inheredoc = 0; hdnext = 0; next }
 	if (inhdr) {
 		if (substr($0, 1, 6) == "+++ b/") file = substr($0, 7)
 		else if (substr($0, 1, 4) == "+++ ") file = ""
-		else if (substr($0, 1, 2) == "@@") inhdr = 0
+		if (substr($0, 1, 2) != "@@") next
+		inhdr = 0
+	}
+	if (c1 == "@") {
+		wallflush()
+		nextline = match($0, /\+[0-9]+/) ? substr($0, RSTART + 1, RLENGTH - 1) + 0 : 0
 		next
 	}
-	if (c1 == "@") { wallflush(); next }
 	if (c1 != "+" || file == "" || skippath(file)) next
+	curline = nextline++
 	text = substr($0, 2)
+	if (hdnext) { inheredoc = 1; hdnext = 0 }
+	heredoc(text, file)
+	if (inheredoc || hdend) {
+		hdend = 0
+		wallflush()
+		check("add", text, file)
+		curline = 0
+		next
+	}
 	if (wallline(text, file)) {
-		if (wallrun == 0) { wallfile = file; walltext = text }
+		if (wallrun == 0) { wallfile = file; walltext = text; wallstart = curline }
 		wallrun++
 	} else wallflush()
 	check("add", text, file)
 	if (iscomment(text, file)) check("comment", text, file)
+	else if (isdoc(file)) check("doc", text, file)
+	curline = 0
 	next
 }
 
@@ -295,6 +351,12 @@ END {
 	}
 	if (json) { if (nblock > 0) exit 1; exit 0 }
 	for (id in more) printf "  (+%d more %s)\n", more[id], id
+	if (summary && nfind > 0) {
+		fflush()
+		for (i = 1; i <= nfind; i++) sc[area(ffile[i]) "\t" fid[i] "\t" fsev[i]]++
+		for (k in sc) print "SUMMARY\t" k "\t" sc[k] | "sort"
+		close("sort")
+	}
 	where = ncommit > 0 ? " in " ncommit " commit(s)" : ""
 	if (nfind > 0) printf "clean-guard: %d blocking, %d warning(s)%s\n", nblock, nwarn, where
 	else if (!quiet) printf "clean-guard: clean%s\n", (ncommit > 0 ? " (" ncommit " commit(s) scanned)" : "")

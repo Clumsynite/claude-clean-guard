@@ -162,6 +162,25 @@ streams_staged() {
 
 streams_empty() { : > "$T/msg"; : > "$T/ident"; : > "$T/path"; : > "$T/diff"; }
 
+# streams_tree REF: every file at REF as added lines (a diff from the empty tree), so rules apply to the
+# code as it stands rather than to history.
+streams_tree() {
+	c=$(git rev-parse -q --verify "${1:-HEAD}^{commit}") || die "unknown ref ${1:-HEAD}"
+	empty=$(git hash-object -t tree /dev/null) || die "git hash-object failed"
+	: > "$T/msg"
+	: > "$T/ident"
+	set -f
+	IFS=$NL
+	# shellcheck disable=SC2086
+	gitout "$T/tpath" diff --no-color --name-status "$empty" "$c" -- ':/' $EXCL
+	# shellcheck disable=SC2086
+	gitout "$T/tdiff" diff --no-color -U0 --no-ext-diff --no-textconv "$empty" "$c" -- ':/' $EXCL
+	unset IFS
+	set +f
+	{ printf '\001%s\n' "$c"; cat "$T/tpath"; } > "$T/path"
+	{ printf '\001%s\n' "$c"; cat "$T/tdiff"; } > "$T/diff"
+}
+
 # Resolves hex words in the streams to commits, in one git call, for @hexref and --history.
 prep_hex() {
 	LC_ALL=C "$AWK" -v mode=hexcand -f "$SCAN_AWK" kind=msg "$T/msg" kind=diff "$T/diff" > "$T/cand"
@@ -174,7 +193,7 @@ prep_hex() {
 # Runs the matcher; returns 0 (clean or warnings), 1 (blocks) or exits 2.
 run_matcher() {
 	LC_ALL=C "$AWK" -v mode=scan -v strict="$STRICT" -v all="${ALL:-0}" -v json="${JSON:-0}" \
-		-v quiet="${QUIET:-0}" -v history="${HIST:-0}" -v maxc="$MAXC" -v wallsev="$WALLSEV" -f "$SCAN_AWK" \
+		-v quiet="${QUIET:-0}" -v history="${HIST:-0}" -v summary="${SUMMARY:-0}" -v maxc="$MAXC" -v wallsev="$WALLSEV" -f "$SCAN_AWK" \
 		kind=rules "$T/rules.tsv" kind=allow "$T/allow.txt" kind=allowpath "$T/allowpath.txt" \
 		kind=allowemail "$T/allowemail.txt" kind=hex "$T/hex.txt" \
 		kind="${MSGKIND:-msg}" "$T/msg" kind=path "$T/path" kind=diff "$T/diff" kind=ident "$T/ident"
@@ -217,7 +236,7 @@ history_info() {
 }
 
 cmd_scan() {
-	ALL=0 JSON=0 QUIET=0 HIST=0 STAGED=0
+	ALL=0 JSON=0 QUIET=0 HIST=0 STAGED=0 TREE=0 SUMMARY=0
 	RANGE=
 	REFS=
 	inrefs=0
@@ -227,6 +246,8 @@ cmd_scan() {
 		--json) JSON=1 ;;
 		--staged) STAGED=1 ;;
 		--history) HIST=1 ;;
+		--tree) TREE=1 ;;
+		--summary) SUMMARY=1 ;;
 		--quiet) QUIET=1 ;;
 		--refs) inrefs=1 ;;
 		-h | --help) usage; exit 0 ;;
@@ -240,6 +261,9 @@ cmd_scan() {
 	prep_rules
 	if [ "$STAGED" = 1 ]; then
 		streams_staged
+	elif [ "$TREE" = 1 ]; then
+		ref=${RANGE%%"$NL"*}
+		streams_tree "${ref:-HEAD}"
 	elif [ "$HIST" = 1 ]; then
 		PFILTER=
 		case $REFS in '' | "all$NL") set -- --all ;; *)
@@ -950,9 +974,13 @@ cmd_skill_scan() {
 	echo "## Decision"
 	(cmd_status) 2>&1
 	case ${1:-} in
-	'' | history) set -- --history ;;
+	'' | history) set -- --history --summary ;;
 	recent) set -- ;;
 	staged) set -- --staged ;;
+	tree)
+		shift
+		set -- --tree --summary "$@"
+		;;
 	esac
 	echo
 	echo "## clean-guard scan $*"
@@ -972,8 +1000,9 @@ clean-guard: keep AI-tool traces out of the branches you ship
   clean-guard init --track [--branch GLOB]... [--remote NAME]... [--url GLOB]... [--strict]
                    [--no-shared-history-with REF]... --reason TEXT [--by agent|user] [--force]
   clean-guard init --untrack --reason TEXT [--by agent|user] [--force]
-  clean-guard scan [RANGE] [--staged] [--all] [--json]
-  clean-guard scan --history [--refs all|REF...] [--all] [--json]
+  clean-guard scan [RANGE] [--staged] [--all] [--json] [--summary]
+  clean-guard scan --tree [REF] [--all] [--json] [--summary]       (files as they stand at REF)
+  clean-guard scan --history [--refs all|REF...] [--all] [--json] [--summary]
   clean-guard status | doctor [--fix] [--quiet]
   clean-guard config get|set|add|unset KEY [VALUE]
   clean-guard install-copy [--force] | uninstall-repo | uninstall [--force] | version

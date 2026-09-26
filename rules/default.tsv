@@ -1,5 +1,6 @@
 # clean-guard default rules. Columns (tab-separated):
-#   id  severity(block|warn)  targets(msg,add,comment,path,ident)  flags(- | strict | strictblock)  ERE
+#   id  severity(block|warn)  targets(msg,add,comment,doc,path,ident)  flags(- | strict | strictblock)  ERE
+# doc = added lines in .md, .markdown, .rst, .txt and .adoc files.
 # Lines are lowercased before matching, so patterns are lowercase POSIX ERE.
 # Word boundaries are spelled (^|[^[:alnum:]_])word([^[:alnum:]_]|$); never \b or \<.
 # flags: strict = row only applies in strict mode; strictblock = warn normally, block in strict mode.
@@ -23,10 +24,14 @@ notes-file	block	path	-	(^|/)\.?plans/
 test-file	block	path	strict	(^|/)(__tests__|test|tests|e2e|spec)/
 test-file	block	path	strict	(^|/)[^/]*\.(test|spec)\.[^/]+$
 test-file	block	path	strict	(^|/)(test_[^/]*\.py|[^/]*_test\.(go|py))$
-process-words	warn	msg,comment	-	(^|[^[:alnum:]_])(as discussed|per (our|the) (session|conversation|chat)|this session|the agent (added|wrote|suggested)|ai-cleanup|ai slop)([^[:alnum:]_]|$)
-process-words	warn	msg,comment	-	(^|[^[:alnum:]_])(used to (be|do|have|return|call)|previously (was|did|used|returned))([^[:alnum:]_]|$)
-slop-words	warn	msg,comment	-	(^|[^[:alnum:]_])(as requested|as you (asked|requested)|it'?s worth noting|it is worth noting|for clarity|as mentioned (above|earlier|before))([^[:alnum:]_]|$)
+process-words	warn	msg,comment,doc	-	(^|[^[:alnum:]_])(as discussed|per (our|the) (session|conversation|chat)|this session|the agent (added|wrote|suggested)|ai-cleanup|ai slop)([^[:alnum:]_]|$)
+process-words	warn	msg,comment,doc	-	(^|[^[:alnum:]_])(used to (be|do|have|return|call)|previously (was|did|used|returned))([^[:alnum:]_]|$)
+process-words	warn	msg,comment,doc	-	(^|[^[:alnum:]_])(we tried|was tried|we used to)([^[:alnum:]_]|$)
+slop-words	warn	msg,comment,doc	-	(^|[^[:alnum:]_])(as requested|as you (asked|requested)|it'?s worth noting|it is worth noting|for clarity|as mentioned (above|earlier|before))([^[:alnum:]_]|$)
 slop-words	warn	comment	-	(^|[^[:alnum:]_])(this (change|commit|fix|patch)|now (handles|supports|uses|returns|accepts)|(updated|changed|refactored|rewritten) (to|from)|note that|newly added)([^[:alnum:]_]|$)
+slop-words	warn	msg,comment,doc	-	(^|[^[:alnum:]_])(deliberately|load-bearing|genuinely|honestly|crucially)([^[:alnum:]_]|$)
+slop-words	warn	doc	-	§
+comment-banner	warn	comment	strictblock	^[ \t]*(//+|#+|/\*+|\*+|--+|;+)[ \t]*(#+[ \t]|[-=*_#~][-=*_#~][-=*_#~][-=*_#~])
 history-refs	warn	msg,comment	strict	(^|[^0-9])20[0-9][0-9]-[01][0-9]-[0-3][0-9]([^0-9]|$)
 history-refs	warn	msg,comment	strict	(^|[^[:alnum:]_])ticket #
 history-refs	warn	msg,comment	strict	(^|[^0-9.])[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+([^0-9.]|$)

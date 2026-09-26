@@ -139,7 +139,7 @@ Generated with Claude Code"
 	fcase "add line ai-name" +ai-name src/a.js "// written by Claude"
 	fcase "add line near-miss" -ai-name src/b.js "const claudette = 1"
 	fcase "comment process-words" +process-words src/c.js "// as discussed with the team"
-	fcase "markdown heading is not a comment" -process-words docs/d.md "# as discussed"
+	fcase "markdown heading is not a comment" -comment-banner docs/d.md "## Setup"
 
 	git commit -q --allow-empty -m "Plain" --author "Root <root@box.local>"
 	out=$(cg scan 'HEAD^!')
@@ -158,6 +158,19 @@ Generated with Claude Code"
 	fcase "slop near-miss handles" -slop-words src/s4.js "// Handles empty input"
 	fcase "slop near-miss updated total" -slop-words src/s5.js "// Returns the updated total"
 	mcase "slop in a message" +slop-words "Fix the login check as requested"
+	fcase "banner divider" +comment-banner src/b1.js "// ---- Section ----"
+	fcase "banner heading" +comment-banner scripts/b2.sh "## Setup"
+	fcase "banner near-miss modeline" -comment-banner src/b3.py "# -*- coding: utf-8 -*-"
+	fcase "banner near-miss jsdoc" -comment-banner src/b4.ts "/** One line. */"
+	fcase "doc wording" +slop-words docs/d1.md "The cache is deliberately small."
+	fcase "doc history" +process-words docs/d2.md "We tried a bigger cache first."
+	fcase "doc near-miss" -slop-words docs/d3.md "Run the installer, then restart the service."
+	fcase "heredoc text is not a comment" -comment-banner scripts/h1.sh "$(printf 'cat > out.md <<'"'"'EOF'"'"'\n## What this is\n# a\n# b\nEOF\nrun')"
+	fcase "heredoc text is not a comment wall" -comment-wall scripts/h2.sh "$(printf 'cat <<-END\n\t# a\n\t# b\n\t# c\n\t# d\n\tEND\nrun')"
+	fcase "comments after a heredoc still count" +comment-wall scripts/h3.sh "$(printf 'cat <<EOF\nx\nEOF\n# a\n# b\n# c\n# d\nrun')"
+	fcase "a heredoc named in a comment doesn't hide code" +comment-wall scripts/h4.sh "$(printf '# usage: cat <<EOF\n# a\n# b\n# c\nrun')"
+	fcase "section sign in a code comment is fine" -slop-words src/rfc.ts "// RFC 4226 section 5.3 (§5.3) truncation"
+	fcase "license files are skipped" -slop-words LICENSE.txt "§1 The notices travel with the files."
 
 	# strict mode
 	git config -f "$(df)" guard.decision tracked
@@ -610,6 +623,43 @@ if [ -z "${CI:-}" ]; then
 fi
 cd "$WORK" || exit 1
 
+# ---------------------------------------------------------------- scan --tree and --summary
+
+newrepo "$WORK/tree"
+mkdir -p src/api docs
+printf '// one\n// two\n// three\n// four\nold()\n' > src/api/gone.js
+git add src/api/gone.js
+git commit -q -m "Add old file"
+git rm -q src/api/gone.js
+mkdir -p src/api
+printf 'const a = 1\nconst b = 2\n// one\n// two\n// three\n// four\nrun()\n' > src/api/now.js
+printf 'This is deliberately simple.\n' > docs/guide.md
+git add src/api/now.js docs/guide.md
+git commit -q -m "Add current files"
+out=$(cg scan --tree)
+check "tree: current comment wall with its line" "$out" "WARN comment-wall [0-9a-f]{7} comment src/api/now.js:3: 4 comment lines"
+lacks "tree: a deleted file is not reported" "$out" "gone\.js"
+check "tree: doc wording with its line" "$out" "slop-words [0-9a-f]{7} doc docs/guide.md:1"
+out=$(cg scan --tree HEAD~1)
+check "tree at an older ref" "$out" "src/api/gone.js:1"
+out=$(cg scan HEAD~2..HEAD)
+check "history range still sees the deleted file" "$out" "gone\.js"
+out=$(cg scan --tree --summary)
+check "summary has per-area rows" "$out" "$(printf 'SUMMARY\tsrc/api\tcomment-wall\twarn\t1')"
+check "summary counts docs" "$out" "$(printf 'SUMMARY\tdocs\tslop-words\twarn\t1')"
+out=$(cg scan --tree --json)
+check "json carries the line" "$out" '"file":"src/api/now.js","line":3,'
+git config -f "$(df)" guard.decision untracked
+git config -f "$(df)" rules.extra 'warn doc (^|[^[:alnum:]_])lab-node-[0-9]+'
+printf 'Deploy to lab-node-7 first.\n' > docs/lab.md
+git add docs/lab.md
+git commit -q -m "Add lab doc"
+out=$(cg scan --tree 2>&1)
+check "rules.extra accepts the doc target" "$out" "extra [0-9a-f]{7} doc docs/lab.md:1"
+out=$(cg skill-scan tree)
+check "skill-scan tree" "$out" "^## clean-guard scan --tree --summary$"
+cd "$WORK" || exit 1
+
 # ---------------------------------------------------------------- /clean-guard:scan skill
 
 out=$(cd "$WORK/plain" && cg skill-scan)
@@ -620,7 +670,7 @@ git commit -q --allow-empty -m "Claude wrote this"
 out=$(cg skill-scan)
 rc "skill-scan exits 0 even with blocks" 0 $? "$out"
 check "skill-scan shows the decision" "$out" "^decision: none"
-check "skill-scan defaults to a history scan" "$out" "^## clean-guard scan --history$"
+check "skill-scan defaults to a history scan" "$out" "^## clean-guard scan --history --summary$"
 check "skill-scan reports the scan exit code" "$out" "^exit code: 1 "
 out=$(cg skill-scan recent)
 check "skill-scan recent scans unpushed commits" "$out" "^## clean-guard scan $"

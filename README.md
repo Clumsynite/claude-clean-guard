@@ -100,7 +100,7 @@ Claude may change only one thing itself: adding a narrow `allow.pattern` or `all
 
 ## Rules
 
-Lines are lowercased and matched as POSIX ERE. Targets: `msg` (commit message lines), `path` (changed paths), `add` (added lines), `comment` (added lines that look like comments; Markdown, reST and text files don't count), `ident` (author and committer).
+Lines are lowercased and matched as POSIX ERE. Targets: `msg` (commit message lines), `path` (changed paths), `add` (added lines), `comment` (added lines that look like comments; Markdown, reST and text files don't count), `doc` (added lines in `.md`, `.markdown`, `.rst`, `.txt` and `.adoc` files), `ident` (author and committer).
 
 | rule | severity | targets | catches |
 |---|---|---|---|
@@ -110,8 +110,9 @@ Lines are lowercased and matched as POSIX ERE. Targets: `msg` (commit message li
 | ai-file | block | path | `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, `.claude/`, `.cursor/`, `.cursorrules`, `.aider*`, `.aidex/`, `.windsurf*`, `.continue/`, `.github/copilot-instructions.md`, `.mcp.json`, `.clean-guard` |
 | notes-file | block | path | `handoff*.md`, `plan.md`, `plans/`, `pickup*.md`, `*-plan.md` |
 | test-file | block (strict only) | path | `test/`, `tests/`, `__tests__/`, `e2e/`, `spec/`, `*.test.*`, `*.spec.*`, `test_*.py`, `*_test.go`, `*_test.py` |
-| process-words | warn | msg, comment | "as discussed", "this session", "the agent added", "used to be", "previously was" and similar |
-| slop-words | warn | msg, comment | narration of the change: "as requested", "for clarity", "it's worth noting"; in comments also "this change", "now handles", "updated to", "note that" |
+| process-words | warn | msg, comment, doc | "as discussed", "this session", "the agent added", "used to be", "previously was", "measured on", "reported by", "we tried" and similar |
+| slop-words | warn | msg, comment, doc | narration of the change: "as requested", "for clarity", "it's worth noting"; filler: "deliberately", "load-bearing", "genuinely", "honestly", "crucially", `§`; in comments also "this change", "now handles", "updated to", "note that" |
+| comment-banner | warn (block in strict) | comment | headings and dividers inside comments: `// ## Setup`, `// ---- Section ----`, `/*******/` |
 | comment-wall | warn (block in strict) | comment | more than `rules.maxCommentLines` consecutive added comment lines with text in them (lines holding only `/**`, `*/` and the like don't count) |
 | history-refs | warn (strict only) | msg, comment | ISO dates, commit hashes that resolve in the repo, `ticket #`, IPv4 addresses |
 | odd-ident | warn | ident | `root@…`, `@localhost`, `.local`/`.lan` emails, emails with no dot in the domain |
@@ -120,11 +121,12 @@ Exit codes: 0 clean or warnings only, 1 at least one block, 2 usage, config or g
 
 ## Commands
 
-In Claude Code, `/clean-guard:scan` audits the current repo and summarises what to fix without changing anything. With no argument it runs a whole-history audit; `recent` scans unpushed commits, `staged` scans the index, and anything else is passed through as a range. Its one-line description adds about 60 tokens to each session; the rest (about 650) loads only when you run it.
+In Claude Code, `/clean-guard:scan` audits the current repo and summarises what to fix without changing anything. With no argument it runs a whole-history audit; `tree [REF]` checks the files as they stand, `recent` scans unpushed commits, `staged` scans the index, and anything else is passed through as a range. Its one-line description adds about 60 tokens to each session; the rest (about 650) loads only when you run it.
 
 ```
 clean-guard scan [RANGE] [--staged] [--all] [--json]    # default range: @{upstream}..HEAD
 clean-guard scan --history [--refs all|REF...]          # whole-repo audit
+clean-guard scan --tree [REF]                           # the files as they stand at REF (default HEAD), with file:line
 clean-guard status                                      # decision, scope, rules, allow entries, hook health
 clean-guard doctor [--fix]                              # repair missing or disabled hooks
 clean-guard config get|set|add|unset KEY [VALUE]
@@ -132,7 +134,9 @@ clean-guard uninstall-repo                              # remove the hooks and d
 clean-guard uninstall [--force]                         # remove the stable copy (and, with --force, every repo's hooks)
 ```
 
-Output is one line per finding, at most 5 per rule (`--all` lifts the cap), then a summary. `--json` prints one object per finding.
+Output is one line per finding (`file:line` for diff findings), at most 5 per rule (`--all` lifts the cap), then a summary. `--summary` adds a count per area (the top one or two path components) and rule. `--json` prints one object per finding.
+
+Project-specific terms (host names, internal addresses, house style words) belong in that repo's own decision file, not in the default rules: `clean-guard config set rules.extra 'warn comment,doc (^|[^[:alnum:]_])build-host-[0-9]+'` (the user runs it). Use the `comment` or `doc` target for text, and `add` to also catch code defaults.
 
 ## Husky and other hook managers
 
