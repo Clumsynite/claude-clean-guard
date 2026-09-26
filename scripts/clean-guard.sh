@@ -939,6 +939,30 @@ claude_pre_tool() {
 	return 0
 }
 
+# ---------------------------------------------------------------- /clean-guard:scan skill
+
+# Report for the skill: decision, then findings. Always exits 0 so the output reaches the session.
+cmd_skill_scan() {
+	if ! repo_init; then
+		echo "Not inside a git repository."
+		return 0
+	fi
+	echo "## Decision"
+	(cmd_status) 2>&1
+	case ${1:-} in
+	'' | history) set -- --history ;;
+	recent) set -- ;;
+	staged) set -- --staged ;;
+	esac
+	echo
+	echo "## clean-guard scan $*"
+	(cmd_scan "$@") 2>&1
+	rc=$?
+	echo
+	echo "exit code: $rc (0 clean or warnings only, 1 blocking findings, 2 error)"
+	return 0
+}
+
 # ---------------------------------------------------------------- main
 
 usage() {
@@ -969,6 +993,10 @@ doctor) cmd_doctor "$@" ;;
 install-copy) cmd_install_copy "$@" ;;
 uninstall-repo) cmd_uninstall_repo ;;
 uninstall) cmd_uninstall "$@" ;;
+skill-scan)
+	cmd_skill_scan "$@"
+	exit 0
+	;;
 hook)
 	ev=${1:-}
 	[ $# -gt 0 ] && shift

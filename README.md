@@ -19,7 +19,7 @@ The decision is **per repo, and within a repo per branch and remote**. A repo ca
 
 ## Token cost
 
-Zero in untracked repos and outside git. In a tracked repo, a session starts with a short summary of the rules (about 130 words): no AI traces, comments kept short and about why, and no narration of the change. In a repo with no decision yet, the session gets a short note asking Claude to raise the question with you once.
+About 60 tokens per session for the `/clean-guard:scan` skill's description; its body loads only when you run it. The hooks add nothing in untracked repos and outside git. In a tracked repo, a session starts with a short summary of the rules (about 130 words): no AI traces, comments kept short and about why, and no narration of the change. In a repo with no decision yet, the session gets a short note asking Claude to raise the question with you once.
 
 ## Requirements
 
@@ -119,6 +119,8 @@ Lines are lowercased and matched as POSIX ERE. Targets: `msg` (commit message li
 Exit codes: 0 clean or warnings only, 1 at least one block, 2 usage, config or git error. A git error inside a hook blocks the commit or push (fail closed).
 
 ## Commands
+
+In Claude Code, `/clean-guard:scan` audits the current repo and summarises what to fix without changing anything. With no argument it runs a whole-history audit; `recent` scans unpushed commits, `staged` scans the index, and anything else is passed through as a range. Its one-line description adds about 60 tokens to each session; the rest (about 650) loads only when you run it.
 
 ```
 clean-guard scan [RANGE] [--staged] [--all] [--json]    # default range: @{upstream}..HEAD

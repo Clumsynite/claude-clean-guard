@@ -610,6 +610,26 @@ if [ -z "${CI:-}" ]; then
 fi
 cd "$WORK" || exit 1
 
+# ---------------------------------------------------------------- /clean-guard:scan skill
+
+out=$(cd "$WORK/plain" && cg skill-scan)
+rc "skill-scan outside git exits 0" 0 $? "$out"
+check "skill-scan outside git says so" "$out" "Not inside a git repository"
+newrepo "$WORK/sk"
+git commit -q --allow-empty -m "Claude wrote this"
+out=$(cg skill-scan)
+rc "skill-scan exits 0 even with blocks" 0 $? "$out"
+check "skill-scan shows the decision" "$out" "^decision: none"
+check "skill-scan defaults to a history scan" "$out" "^## clean-guard scan --history$"
+check "skill-scan reports the scan exit code" "$out" "^exit code: 1 "
+out=$(cg skill-scan recent)
+check "skill-scan recent scans unpushed commits" "$out" "^## clean-guard scan $"
+out=$(cg skill-scan staged)
+check "skill-scan staged scans the index" "$out" "^## clean-guard scan --staged$"
+out=$(cg skill-scan 'HEAD~1..HEAD')
+check "skill-scan passes a range through" "$out" "BLOCK ai-name"
+cd "$WORK" || exit 1
+
 # ---------------------------------------------------------------- summary
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
