@@ -68,14 +68,25 @@ function cmdword(   i) {
 	return 0
 }
 
-function writecheck(   i, hasw, hasp, sedlike) {
+# A redirect writes only to its own target; 2>&1 and redirects elsewhere are fine.
+function writecheck(   i, t, tgt, hasw, hasp, sedlike) {
 	hasw = 0; hasp = 0; sedlike = 0
 	for (i = 1; i <= nt; i++) {
-		if (index(tk[i], ">")) hasw = 1
+		t = tk[i]
+		if (index(t, ">")) {
+			tgt = t
+			sub(/^.*>/, "", tgt)
+			if (tgt == "" && i < nt) tgt = tk[i + 1]
+			if (substr(tgt, 1, 1) != "&" && protected(tgt)) {
+				deny("writing to the clean-guard decision file or a git config file is blocked")
+				return
+			}
+			continue
+		}
 		if (lc[i] ~ /(^|\/)(mv|rm|cp|tee|truncate|ln|dd|install|unlink)$/) hasw = 1
 		if (lc[i] ~ /(^|\/)(sed|perl)$/) sedlike = 1
 		else if (sedlike && lc[i] ~ /^-[a-z]*i/) hasw = 1
-		if (protected(tk[i])) hasp = 1
+		if (protected(t)) hasp = 1
 	}
 	if (hasw && hasp) deny("writing to the clean-guard decision file or a git config file is blocked")
 }
