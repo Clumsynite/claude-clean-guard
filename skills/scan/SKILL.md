@@ -27,9 +27,10 @@ Audit this repo for AI-tool traces and AI-style comments and tell the user what 
    - **Warnings** in one line per rule. Say plainly when one looks like a false positive (for example "agent" meaning a
      software agent).
    - **Info** lines (identities, timezones, dates, replace refs, stash) only when they look odd.
-3. For each blocking rule, give the fix in one line. Use a reworded commit or an interactive rebase for messages,
-   `git rm` plus a history rewrite for committed AI or notes files, and a narrow `allow.pattern` for a real false
-   positive.
+3. For each blocking rule, give the fix in one line. Attribution trailers, generated-with lines and committed AI or
+   notes files: `clean-guard fix --history BRANCH --to NEW` (or `/clean-guard:fix history`). Banners, filler phrases
+   and AI files in the files as they stand: `clean-guard fix`. Other message wording: an interactive rebase. A real
+   false positive: a narrow `allow.pattern`.
 4. If the decision is `none`, end with one line: this repo has no clean-guard decision, and the user can record one with
    `clean-guard init --track …` or `clean-guard init --untrack …`.
 

@@ -44,6 +44,7 @@ self_dir() {
 CG_HOME=${CLEAN_GUARD_HOME:-$(self_dir)}
 SCAN_AWK=$CG_HOME/scan.awk
 GUARD_AWK=$CG_HOME/guard.awk
+FIX_AWK=$CG_HOME/fix.awk
 if [ -f "$CG_HOME/rules/default.tsv" ]; then
 	RULES=$CG_HOME/rules/default.tsv
 else
@@ -162,10 +163,11 @@ streams_staged() {
 
 streams_empty() { : > "$T/msg"; : > "$T/ident"; : > "$T/path"; : > "$T/diff"; }
 
-# streams_tree REF: every file at REF as added lines (a diff from the empty tree), so rules apply to the
-# code as it stands rather than to history.
+# streams_tree REF: every file at REF (a commit or a tree) as added lines (a diff from the empty tree), so
+# rules apply to the code as it stands rather than to history.
 streams_tree() {
-	c=$(git rev-parse -q --verify "${1:-HEAD}^{commit}") || die "unknown ref ${1:-HEAD}"
+	c=$(git rev-parse -q --verify "${1:-HEAD}^{commit}" 2> /dev/null) || c=$(git rev-parse -q --verify "${1:-HEAD}^{tree}") ||
+		die "unknown ref ${1:-HEAD}"
 	empty=$(git hash-object -t tree /dev/null) || die "git hash-object failed"
 	: > "$T/msg"
 	: > "$T/ident"
@@ -179,6 +181,15 @@ streams_tree() {
 	set +f
 	{ printf '\001%s\n' "$c"; cat "$T/tpath"; } > "$T/path"
 	{ printf '\001%s\n' "$c"; cat "$T/tdiff"; } > "$T/diff"
+}
+
+# streams_worktree: tracked files as they are on disk, edits included, through a throwaway index.
+streams_worktree() {
+	src=$(git rev-parse --git-path index) || die "git rev-parse failed"
+	if [ -f "$src" ]; then cp "$src" "$T/index" || die "cannot copy the index"; fi
+	GIT_INDEX_FILE=$T/index git add -u -- ':/' 2> "$T/git.err" || die "git add -u failed: $(cat "$T/git.err")"
+	wt=$(GIT_INDEX_FILE=$T/index git write-tree) || die "git write-tree failed"
+	streams_tree "$wt"
 }
 
 # Resolves hex words in the streams to commits, in one git call, for @hexref and --history.
@@ -236,7 +247,7 @@ history_info() {
 }
 
 cmd_scan() {
-	ALL=0 JSON=0 QUIET=0 HIST=0 STAGED=0 TREE=0 SUMMARY=0
+	ALL=0 JSON=0 QUIET=0 HIST=0 STAGED=0 TREE=0 WORK=0 SUMMARY=0
 	RANGE=
 	REFS=
 	inrefs=0
@@ -247,6 +258,7 @@ cmd_scan() {
 		--staged) STAGED=1 ;;
 		--history) HIST=1 ;;
 		--tree) TREE=1 ;;
+		--worktree) WORK=1 ;;
 		--summary) SUMMARY=1 ;;
 		--quiet) QUIET=1 ;;
 		--refs) inrefs=1 ;;
@@ -261,6 +273,8 @@ cmd_scan() {
 	prep_rules
 	if [ "$STAGED" = 1 ]; then
 		streams_staged
+	elif [ "$WORK" = 1 ]; then
+		streams_worktree
 	elif [ "$TREE" = 1 ]; then
 		ref=${RANGE%%"$NL"*}
 		streams_tree "${ref:-HEAD}"
@@ -332,23 +346,24 @@ cmd_install_copy() {
 		if [ -f "$pj" ]; then ver=$(plugin_version "$pj"); fi
 		need=$force
 		if [ "$(cat "$DATA/VERSION" 2>/dev/null)" != "$ver" ]; then need=1; fi
-		for f in clean-guard.sh scan.awk guard.awk rules/default.tsv; do [ -f "$DATA/$f" ] || need=1; done
+		for f in clean-guard.sh scan.awk guard.awk fix.awk rules/default.tsv; do [ -f "$DATA/$f" ] || need=1; done
 		if [ "$need" = 1 ]; then
 			mkdir -p "$DATA/rules" || die "cannot create $DATA"
 			tmp=.tmp.$$
 			if ! { cp "$CG_HOME/clean-guard.sh" "$DATA/clean-guard.sh$tmp" &&
 				cp "$CG_HOME/scan.awk" "$DATA/scan.awk$tmp" &&
 				cp "$CG_HOME/guard.awk" "$DATA/guard.awk$tmp" &&
+				cp "$CG_HOME/fix.awk" "$DATA/fix.awk$tmp" &&
 				cp "$RULES" "$DATA/rules/default.tsv$tmp" &&
 				printf '%s\n' "$ver" > "$DATA/VERSION$tmp"; }; then
 				die "copy into $DATA failed"
 			fi
 			if ! sh -n "$DATA/clean-guard.sh$tmp" 2>/dev/null; then
-				rm -f "$DATA/clean-guard.sh$tmp" "$DATA/scan.awk$tmp" "$DATA/guard.awk$tmp" "$DATA/rules/default.tsv$tmp" "$DATA/VERSION$tmp"
+				rm -f "$DATA/clean-guard.sh$tmp" "$DATA/scan.awk$tmp" "$DATA/guard.awk$tmp" "$DATA/fix.awk$tmp" "$DATA/rules/default.tsv$tmp" "$DATA/VERSION$tmp"
 				die "the new clean-guard.sh fails sh -n; kept the old copy in $DATA"
 			fi
 			chmod +x "$DATA/clean-guard.sh$tmp"
-			for f in clean-guard.sh scan.awk guard.awk rules/default.tsv VERSION; do
+			for f in clean-guard.sh scan.awk guard.awk fix.awk rules/default.tsv VERSION; do
 				mv -f "$DATA/$f$tmp" "$DATA/$f" || die "cannot update $DATA/$f"
 			done
 			[ "$quiet" = 1 ] || printf 'clean-guard: stable copy %s installed in %s\n' "$ver" "$DATA"
@@ -817,7 +832,7 @@ tracked_context() {
 	if [ -z "$mc" ]; then if [ -n "$s" ]; then mc=1; else mc=3; fi; fi
 	cl="at most $mc lines"
 	[ "$mc" = 1 ] && cl="one line"
-	printf '%s' "clean-guard: this repo is tracked ($(dget guard.reason)). Scope: branches $(list_or scope.branch all); remotes $(list_or scope.remote all). On these, commits must carry no trace of AI tools: no attribution trailers or \"generated with\" lines, no AI tool names in messages or added code, no AI, plan or handoff files.$s Code must read as if an engineer wrote it: comments are $cl and say why, not what; no narration of the change or this session (\"now handles\", \"this change\", \"as requested\", \"used to\") in code, comments or messages. Allow entries: ${al:-none}. Run \`clean-guard scan --staged\` before committing on these branches. Never bypass or loosen the hooks (--no-verify, hook config, the decision file). To change the decision or scope, ask the user to run it with !."
+	printf '%s' "clean-guard: this repo is tracked ($(dget guard.reason)). Scope: branches $(list_or scope.branch all); remotes $(list_or scope.remote all). On these, commits must carry no trace of AI tools: no attribution trailers or \"generated with\" lines, no AI tool names in messages or added code, no AI, plan or handoff files.$s Code must read as if an engineer wrote it: comments are $cl and say why, not what; no narration of the change or this session (\"now handles\", \"this change\", \"as requested\", \"used to\") in code, comments or messages. Allow entries: ${al:-none}. Run \`clean-guard scan --staged\` before committing on these branches. To clean up findings, run \`clean-guard fix\` (files) or \`clean-guard fix --history --to NEW\` (commits) first, then reword by hand only what it leaves. Never bypass or loosen the hooks (--no-verify, hook config, the decision file). To change the decision or scope, ask the user to run it with !."
 }
 
 claude_session_start() {
@@ -963,6 +978,212 @@ claude_pre_tool() {
 	return 0
 }
 
+# ---------------------------------------------------------------- fix
+
+# fix_run MODE [AWK ARGS...]: fix.awk in MODE with the repo's rules loaded (prep_rules first), reading
+# FIXFILE as kind FIXKIND.
+fix_run() {
+	m=$1
+	shift
+	LC_ALL=C "$AWK" -v mode="$m" "$@" -f "$FIX_AWK" -f "$SCAN_AWK" kind=rules "$T/rules.tsv" kind=allow "$T/allow.txt" \
+		kind=allowpath "$T/allowpath.txt" "kind=$FIXKIND" "$FIXFILE" || die "fix failed ($m)"
+}
+
+# Keeps a path out of git status once it's untracked, without touching .gitignore.
+exclude_add() {
+	ex=$(git rev-parse --git-path info/exclude) || return 1
+	mkdir -p "$(dirname "$ex")" || return 1
+	grep -Fqx -- "/$1" "$ex" 2> /dev/null || printf '/%s\n' "$1" >> "$ex"
+}
+
+fix_tree() {
+	dry=$1
+	mkdir -p "$T/fix" || die "cannot create $T/fix"
+	set -f
+	IFS=$NL
+	# shellcheck disable=SC2086
+	gitout "$T/files" ls-files -- ':/' $EXCL
+	# shellcheck disable=SC2086
+	gitout "$T/stage" ls-files -s -- ':/' $EXCL
+	# shellcheck disable=SC2086
+	git --no-replace-objects -c core.quotePath=false grep -I -l -e '' -- ':/' $EXCL > "$T/text" 2> "$T/git.err"
+	grc=$?
+	unset IFS
+	set +f
+	[ "$grc" -le 1 ] || die "git grep failed: $(cat "$T/git.err")"
+	FIXKIND=paths FIXFILE=$T/files
+	fix_run aipaths > "$T/aifiles"
+	"$AWK" -F '\t' '$1 ~ /^120000 / { print $2 }' "$T/stage" | cat - "$T/aifiles" > "$T/skip"
+	"$AWK" -v skip="$T/skip" 'BEGIN { while ((getline l < skip) > 0) s[l] = 1 } !($0 in s) && substr($0, 1, 1) != "\""' \
+		"$T/text" > "$T/list"
+	FIXKIND=list FIXFILE=$T/list
+	fix_run fixtree -v outdir="$T/fix" > "$T/fixed"
+	tab=$(printf '\t')
+	if [ "$dry" = 0 ]; then
+		while IFS=$tab read -r tag n p _; do
+			[ "$tag" = F ] || continue
+			if [ -n "$(tail -c 1 "$p")" ]; then
+				cat "$T/fix/$n" > "$p" || die "cannot write $p"
+			else
+				{ cat "$T/fix/$n" && echo; } > "$p" || die "cannot write $p"
+			fi
+		done < "$T/fixed"
+		while IFS= read -r p; do
+			git rm -q --cached -- "$p" > /dev/null || die "git rm --cached $p failed"
+			if [ -e "$p" ]; then exclude_add "$p"; fi
+		done < "$T/aifiles"
+	fi
+	"$AWK" -F '\t' -v dry="$dry" '
+		function det(b, d, w, g,   s) {
+			s = ""
+			if (b) s = s ", " b " banner(s) cut to their text"
+			if (d) s = s ", " d " divider line(s) removed"
+			if (w) s = s ", " w " filler phrase(s) dropped"
+			if (g) s = s ", " g " generated-with line(s) removed"
+			return substr(s, 3)
+		}
+		$1 == "F" {
+			nf++; b += $4; d += $5; w += $6; g += $7
+			if (dry && nf <= 40) printf "  %s: %s\n", $3, det($4, $5, $6, $7)
+		}
+		$1 == "K" { nk++; if (nk <= 10) kl[nk] = "  " $2 " (a test has \"" $3 "\")" }
+		END {
+			if (dry && nf > 40) printf "  (+%d more files)\n", nf - 40
+			if (nf) printf "clean-guard fix: %s %d file(s): %s\n", (dry ? "would change" : "changed"), nf, det(b, d, w, g)
+			else print "clean-guard fix: nothing to change in the files"
+			if (nk) {
+				printf "clean-guard fix: left %d line(s) alone because a test file has the same text; reword each with its test:\n", nk
+				for (i = 1; i <= nk && i <= 10; i++) print kl[i]
+				if (nk > 10) printf "  (+%d more)\n", nk - 10
+			}
+		}' "$T/fixed"
+	if [ -s "$T/aifiles" ]; then
+		if [ "$dry" = 1 ]; then v="would untrack"; else v="untracked"; fi
+		printf 'clean-guard fix: %s AI and notes files (kept on disk, listed in .git/info/exclude): %s\n' "$v" "$(paste -s -d ' ' - < "$T/aifiles")"
+	fi
+	if [ "$dry" = 1 ]; then
+		echo "Run clean-guard fix to apply; git diff shows the result."
+		return 0
+	fi
+	echo
+	echo "## Left for you: clean-guard scan --worktree --summary"
+	(cmd_scan --worktree --summary)
+	rc=$?
+	echo "next: check git diff, reword what's left by hand (comment walls, narration, AI names in code), run the tests, commit"
+	return "$rc"
+}
+
+fix_history() {
+	src=$1 to=$2 dry=$3
+	if [ -z "$src" ]; then
+		src=$(git symbolic-ref --short -q HEAD) || die "HEAD is detached; name the branch (clean-guard fix --history BRANCH)"
+	fi
+	src=${src#refs/heads/}
+	ref=refs/heads/$src
+	old=$(git rev-parse -q --verify "$ref^{commit}") || die "no branch $src"
+	dst=$ref
+	if [ -n "$to" ]; then
+		git check-ref-format --branch "$to" > /dev/null 2>&1 || die "bad branch name $to"
+		dst=refs/heads/$to
+		if git rev-parse -q --verify "$dst" > /dev/null; then die "branch $to already exists"; fi
+	fi
+	cur=$(git symbolic-ref -q HEAD)
+	if [ "$dry" = 0 ] && [ "$dst" = "$cur" ] && ! git diff --cached --quiet; then
+		die "there are staged changes on $src; commit or unstage them first"
+	fi
+	tmp=refs/clean-guard/fix-$$
+	gitout "$T/fe" fast-export --no-data --signed-tags=strip --signed-commits=strip --reencode=yes "$ref"
+	FIXKIND=fe FIXFILE=$T/fe
+	fix_run fixfe -v target="$tmp" -v stats="$T/festats" > "$T/fe.new"
+	sed -n 's/^path //p' "$T/festats" > "$T/fepaths"
+	nm=$(fe_stat messages)
+	np=$(wc -l < "$T/fepaths" | tr -d ' ')
+	if [ "$nm" = 0 ] && [ "$np" = 0 ]; then
+		printf 'clean-guard fix --history: no attribution lines or AI files in the %s commit(s) of %s\n' "$(fe_stat commits)" "$src"
+	else
+		if [ "$dry" = 1 ]; then v="would rewrite"; else v="rewrote"; fi
+		printf 'clean-guard fix --history: %s %s%s: %s commit(s) read, %s message(s) cleaned (%s attribution line(s) cut), %s AI or notes path(s) dropped from %s commit(s), %s commit(s) left empty and dropped\n' \
+			"$v" "$src" "${to:+ into $to}" "$(fe_stat commits)" "$nm" "$(fe_stat lines)" "$np" "$(fe_stat pathcommits)" "$(fe_stat empty)"
+	fi
+	if [ "$np" -gt 0 ]; then
+		more=
+		if [ "$np" -gt 10 ]; then more=" (+$((np - 10)) more)"; fi
+		printf '  dropped: %s%s\n' "$(head -n 10 "$T/fepaths" | paste -s -d ' ' -)" "$more"
+	fi
+	[ "$dry" = 0 ] || return 0
+	if [ "$nm" = 0 ] && [ "$np" = 0 ]; then
+		new=$old
+	else
+		if ! git fast-import --quiet --force < "$T/fe.new" > /dev/null 2> "$T/git.err"; then
+			git update-ref -d "$tmp" 2> /dev/null
+			die "git fast-import failed: $(cat "$T/git.err")"
+		fi
+		new=$(git rev-parse -q --verify "$tmp^{commit}") || die "git fast-import wrote no commit"
+		git update-ref -d "$tmp"
+	fi
+	if [ -n "$to" ]; then
+		git update-ref -m "clean-guard fix --history $src" "$dst" "$new" "" || die "cannot create $to"
+		echo "new branch $to; $src is unchanged"
+	elif [ "$new" != "$old" ]; then
+		git update-ref -m "clean-guard fix --history" "$dst" "$new" "$old" || die "cannot update $src"
+		if [ "$dst" = "$cur" ]; then
+			git reset -q || die "git reset failed; the rewrite is in place, run git reset yourself"
+			while IFS= read -r p; do
+				if [ -e "$p" ]; then exclude_add "$p"; fi
+			done < "$T/fepaths"
+		fi
+		echo "old tip ${old%"${old#???????}"}; to undo: git update-ref $dst $old"
+		rem=$(git for-each-ref --contains "$old" --format='%(refname:short)' refs/remotes | paste -s -d ' ' -)
+		if [ -n "$rem" ]; then
+			echo "note: the old commits are on $rem. Publishing this rewrite there needs a force push, which clean-guard blocks on scoped remotes; push it as a new branch or to another remote, or use --to NEW next time."
+		fi
+		echo "note: the old commits stay in the reflog until you clear it: git reflog expire --expire=now --all && git gc --prune=now"
+	fi
+	echo
+	echo "## Left for you: clean-guard scan ${dst#refs/heads/} --summary"
+	(cmd_scan "$dst" --summary)
+	rc=$?
+	echo "next: reword the messages that are left with git rebase -i. Findings in files come from the versions each commit added:"
+	echo "run clean-guard fix for the files as they stand, and squash if the old versions must not ship either"
+	return "$rc"
+}
+
+fe_stat() { sed -n "s/^$1 //p" "$T/festats"; }
+
+cmd_fix() {
+	hist=0 dry=0 to='' br=''
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--history) hist=1 ;;
+		--tree) hist=0 ;;
+		--dry-run | -n) dry=1 ;;
+		--to)
+			[ $# -ge 2 ] || die "--to needs a branch name"
+			to=$2
+			shift
+			;;
+		-h | --help)
+			usage
+			exit 0
+			;;
+		-*) die "unknown fix option $1" ;;
+		*)
+			[ -z "$br" ] || die "fix takes one branch"
+			br=$1
+			;;
+		esac
+		shift
+	done
+	if [ "$hist" = 0 ] && [ -n "$br$to" ]; then die "a branch and --to go with --history"; fi
+	need_repo
+	load_decision
+	top=$(git rev-parse --show-toplevel 2> /dev/null) || die "fix needs a work tree"
+	cd "$top" || exit 2
+	prep_rules
+	if [ "$hist" = 1 ]; then fix_history "$br" "$to" "$dry"; else fix_tree "$dry"; fi
+	exit $?
+}
+
 # ---------------------------------------------------------------- /clean-guard:scan skill
 
 # Report for the skill: decision, then findings. Always exits 0 so the output reaches the session.
@@ -991,6 +1212,27 @@ cmd_skill_scan() {
 	return 0
 }
 
+# Preview for the /clean-guard:fix skill: a dry run of what fix would do. Always exits 0.
+cmd_skill_fix() {
+	if ! repo_init; then
+		echo "Not inside a git repository."
+		return 0
+	fi
+	echo "## Decision"
+	(cmd_status) 2>&1
+	case ${1:-} in
+	history)
+		shift
+		set -- --history "$@" --dry-run
+		;;
+	*) set -- --dry-run ;;
+	esac
+	echo
+	echo "## clean-guard fix $*"
+	(cmd_fix "$@") 2>&1
+	return 0
+}
+
 # ---------------------------------------------------------------- main
 
 usage() {
@@ -1002,7 +1244,10 @@ clean-guard: keep AI-tool traces out of the branches you ship
   clean-guard init --untrack --reason TEXT [--by agent|user] [--force]
   clean-guard scan [RANGE] [--staged] [--all] [--json] [--summary]
   clean-guard scan --tree [REF] [--all] [--json] [--summary]       (files as they stand at REF)
+  clean-guard scan --worktree [--all] [--json] [--summary]         (tracked files on disk, edits included)
   clean-guard scan --history [--refs all|REF...] [--all] [--json] [--summary]
+  clean-guard fix [--dry-run]                                      (banners, filler phrases, AI files on disk)
+  clean-guard fix --history [BRANCH] [--to NEW] [--dry-run]        (attribution lines and AI files out of every commit)
   clean-guard status | doctor [--fix] [--quiet]
   clean-guard config get|set|add|unset KEY [VALUE]
   clean-guard install-copy [--force] | uninstall-repo | uninstall [--force] | version
@@ -1015,6 +1260,7 @@ cmd=${1:-help}
 [ $# -gt 0 ] && shift
 case $cmd in
 scan) cmd_scan "$@" ;;
+fix) cmd_fix "$@" ;;
 init) cmd_init "$@" ;;
 config) cmd_config "$@" ;;
 status) cmd_status ;;
@@ -1024,6 +1270,10 @@ uninstall-repo) cmd_uninstall_repo ;;
 uninstall) cmd_uninstall "$@" ;;
 skill-scan)
 	cmd_skill_scan "$@"
+	exit 0
+	;;
+skill-fix)
+	cmd_skill_fix "$@"
 	exit 0
 	;;
 hook)

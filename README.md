@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Clumsynite/claude-clean-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/Clumsynite/claude-clean-guard/actions/workflows/ci.yml)
 [![Release](https://github.com/Clumsynite/claude-clean-guard/actions/workflows/release.yml/badge.svg)](https://github.com/Clumsynite/claude-clean-guard/actions/workflows/release.yml)
-[![Latest release](https://img.shields.io/badge/release-v0.1.0-blue.svg)](https://github.com/Clumsynite/claude-clean-guard/releases/latest)
+[![Latest release](https://img.shields.io/badge/release-v0.2.0-blue.svg)](https://github.com/Clumsynite/claude-clean-guard/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Keep AI-tool traces out of the branches you ship. clean-guard is a small POSIX sh CLI plus a Claude Code plugin:
@@ -10,6 +10,7 @@ Keep AI-tool traces out of the branches you ship. clean-guard is a small POSIX s
 - **git hooks** strip attribution trailers (`Co-Authored-By: Claude …`, `🤖 Generated with …`) and block commits and pushes that still carry AI-tool traces on the branches and remotes you choose. They run for every push, from Claude or from your own terminal.
 - **a Claude hook** stops the agent bypassing or loosening those hooks (`--no-verify`, hook config overrides, editing the decision file, force pushes to a scoped remote).
 - **`clean-guard scan --history`** audits a whole repo: every ref, deleted files, unreachable commits, stash, replace refs, reflog, identities and date anomalies.
+- **`clean-guard fix`** does the mechanical cleanup itself: it cuts attribution lines and AI or notes files out of a branch's commits, and fixes comment banners, dividers and filler phrases in the files. What's left for Claude, or you, is the rewording that needs judgment.
 
 ## Why
 
@@ -19,7 +20,7 @@ The decision is **per repo, and within a repo per branch and remote**. A repo ca
 
 ## Token cost
 
-About 60 tokens per session for the `/clean-guard:scan` skill's description; its body loads only when you run it. The hooks add nothing in untracked repos and outside git. In a tracked repo, a session starts with a short summary of the rules (about 130 words): no AI traces, comments kept short and about why, and no narration of the change. In a repo with no decision yet, the session gets a short note asking Claude to raise the question with you once.
+About 120 tokens per session for the `/clean-guard:scan` and `/clean-guard:fix` skill descriptions; their bodies load only when you run them. The hooks add nothing in untracked repos and outside git. In a tracked repo, a session starts with a short summary of the rules (about 130 words): no AI traces, comments kept short and about why, and no narration of the change. In a repo with no decision yet, the session gets a short note asking Claude to raise the question with you once.
 
 ## Requirements
 
@@ -121,12 +122,15 @@ Exit codes: 0 clean or warnings only, 1 at least one block, 2 usage, config or g
 
 ## Commands
 
-In Claude Code, `/clean-guard:scan` audits the current repo and summarises what to fix without changing anything. With no argument it runs a whole-history audit; `tree [REF]` checks the files as they stand, `recent` scans unpushed commits, `staged` scans the index, and anything else is passed through as a range. Its one-line description adds about 60 tokens to each session; the rest (about 650) loads only when you run it.
+In Claude Code, `/clean-guard:scan` audits the current repo and summarises what to fix without changing anything. With no argument it runs a whole-history audit; `tree [REF]` checks the files as they stand, `recent` scans unpushed commits, `staged` scans the index, and anything else is passed through as a range. Its one-line description adds about 60 tokens to each session; the rest (about 650) loads only when you run it. `/clean-guard:fix` previews what `clean-guard fix` would change (`history [BRANCH] [--to NEW]` previews a history rewrite), runs it once you confirm, and leaves Claude only the rewording that `fix` can't do.
 
 ```
 clean-guard scan [RANGE] [--staged] [--all] [--json]    # default range: @{upstream}..HEAD
 clean-guard scan --history [--refs all|REF...]          # whole-repo audit
 clean-guard scan --tree [REF]                           # the files as they stand at REF (default HEAD), with file:line
+clean-guard scan --worktree                             # tracked files on disk, uncommitted edits included
+clean-guard fix [--dry-run]                             # see "Fixing findings"
+clean-guard fix --history [BRANCH] [--to NEW] [--dry-run]
 clean-guard status                                      # decision, scope, rules, allow entries, hook health
 clean-guard doctor [--fix]                              # repair missing or disabled hooks
 clean-guard config get|set|add|unset KEY [VALUE]
@@ -137,6 +141,32 @@ clean-guard uninstall [--force]                         # remove the stable copy
 Output is one line per finding (`file:line` for diff findings), at most 5 per rule (`--all` lifts the cap), then a summary. `--summary` adds a count per area (the top one or two path components) and rule. `--json` prints one object per finding.
 
 Project-specific terms (host names, internal addresses, house style words) belong in that repo's own decision file, not in the default rules: `clean-guard config set rules.extra 'warn comment,doc (^|[^[:alnum:]_])build-host-[0-9]+'` (the user runs it). Use the `comment` or `doc` target for text, and `add` to also catch code defaults.
+
+## Fixing findings
+
+`clean-guard fix` handles what doesn't need judgment, so an agent doesn't rewrite hundreds of lines by hand. Run it with `--dry-run` first to see what it would change.
+
+```
+clean-guard fix [--dry-run]                                  # the files on disk
+clean-guard fix --history [BRANCH] [--to NEW] [--dry-run]    # every commit on BRANCH (default: the current one)
+```
+
+**Files** (`fix`): only whole-line comments, block comments and trailing comments after code whose quotes balance, plus prose in `.md`, `.rst`, `.txt` and `.adoc` files outside code fences. The comment syntax comes from the file extension, or from the `#!` line for scripts with no extension. Anything it doesn't recognise is left alone.
+
+- Banners: `// ---- Setup ----` and `# ## Setup` become `// Setup` and `# Setup`. A pure divider line is removed, and `/*******` becomes `/*`. Decoration around something that isn't plain text, such as an ASCII arrow or a table edge, stays.
+- Filler phrases are dropped: "deliberately", "genuinely", "honestly", "crucially", "for clarity", "it's worth noting (that)", "as mentioned above", and in comments "note that". The next word is capitalised only if the dropped phrase was.
+- Comment lines that match `gen-line` (for example "Generated with …") are removed.
+- Tracked AI and notes files are untracked with `git rm --cached`, left on disk, and added to `.git/info/exclude`.
+- Text inside shell heredocs, Go and JS backtick strings, and Python triple-quoted strings is left as it is.
+- A test may assert on comment text. When a changed line holds a string that a test file quotes (several words, or 12+ characters), that line is left alone and reported, so you can reword it together with its test.
+
+It ends with `scan --worktree --summary`, which lists what's left: comment walls, narration ("this change", "used to"), AI names in code, and "load-bearing" and similar words that have no plain replacement. The exit code is that scan's.
+
+**History** (`fix --history`): it rewrites the branch with `git fast-export` and `git fast-import` (no blob data is copied). It removes `attr-trailer` and `gen-line` lines from messages, removes `ai-file` and `notes-file` paths from every commit, and drops commits that held only those paths. Authors, dates and every other file stay as they are. Signed commits lose their signatures.
+
+- `--to NEW` writes the result to a new branch and leaves BRANCH untouched. Use it for anything that's already pushed.
+- Without `--to` it moves BRANCH and prints the undo command (the old tip also stays in the reflog). If BRANCH is checked out, the index is reset to match and the removed files stay on disk, excluded. It refuses to run while changes are staged.
+- Older versions of files stay in the older commits, so `scan` on the branch can still report them. Run `fix` on the files and commit, and squash if the old versions must not ship either.
 
 ## Husky and other hook managers
 

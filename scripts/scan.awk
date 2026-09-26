@@ -360,7 +360,7 @@ END {
 	where = ncommit > 0 ? " in " ncommit " commit(s)" : ""
 	if (nfind > 0) printf "clean-guard: %d blocking, %d warning(s)%s\n", nblock, nwarn, where
 	else if (!quiet) printf "clean-guard: clean%s\n", (ncommit > 0 ? " (" ncommit " commit(s) scanned)" : "")
-	if (nblock > 0) print "fix: reword or rewrite the flagged commits; for a false positive, add an allow entry (clean-guard config add allow.pattern '<ERE>')"
+	if (nblock > 0) print "fix: clean-guard fix (files) or clean-guard fix --history --to NEW (commits) does the mechanical part; reword the rest, or for a false positive add an allow entry (clean-guard config add allow.pattern '<ERE>')"
 	if (history && nunres > 0) {
 		printf "INFO unresolved short hashes in messages: %d\n", nunres
 		for (i = 1; i <= nunres && i <= 5; i++) print "INFO   " unresl[i]

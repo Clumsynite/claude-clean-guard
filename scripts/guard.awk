@@ -93,7 +93,7 @@ function writecheck(   i, t, tgt, hasw, hasp, sedlike) {
 
 function cgcheck(i,   s) {
 	s = lc[i + 1]
-	if (s == "" || s ~ /^(scan|status|doctor|help|version|-h|--help)$/) return
+	if (s == "" || s ~ /^(scan|fix|status|doctor|help|version|-h|--help)$/) return
 	if (s == "config" && lc[i + 2] == "get") return
 	if (s == "config" && lc[i + 2] == "add" && lc[i + 3] ~ /^allow\.(pattern|path)$/) return
 	deny("only the user may run clean-guard " s (s == "config" ? " " lc[i + 2] " " lc[i + 3] : ""))

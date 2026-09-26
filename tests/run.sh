@@ -265,7 +265,7 @@ unset CLEAN_GUARD_AWK
 newrepo "$WORK/m2"
 out=$(cg init --track --remote client --reason "ships to client" --by user 2>&1)
 rc "init --track" 0 $? "$out"
-check "init installs the stable copy" "$(cat "$DATA/VERSION" 2>&1)" "^0\.1\.0$"
+check "init installs the stable copy" "$(cat "$DATA/VERSION" 2>&1)" "^0\.2\.0$"
 check "init lists both hooks" "$(git hook list pre-push; git hook list commit-msg)" "clean-guard-pre-push"
 check "decision file lives in the git dir" "$(git config -f .git/clean-guard --get guard.decision)" "^tracked$"
 check "registry has the repo" "$(cat "$DATA/repos")" "/m2/\.git$"
@@ -664,6 +664,174 @@ out=$(cg skill-scan tree)
 check "skill-scan tree" "$out" "^## clean-guard scan --tree --summary$"
 cd "$WORK" || exit 1
 
+# ---------------------------------------------------------------- fix and scan --worktree
+
+fix_tests() {
+	A=$AWKNAME
+	newrepo "$WORK/fix-$A"
+	mkdir -p pkg docs
+	cat > pkg/a.go << 'EOF'
+package pkg
+
+// ---------------------------------------------------------------------------
+// Fencing
+// ---------------------------------------------------------------------------
+
+// Deliberately skip the cache. The epoch is genuinely new.
+// deliberately zero: the rest stay unset
+// ==== Setup ====
+// ### Why it lives here
+func A() string {
+	s := `
+// ---- raw string ----
+`
+	return s // this is genuinely inline
+}
+
+var q = "a // b" + x // honestly odd
+
+/*****************************************
+ * ---- Block ----
+ *****************************************/
+
+// ------------->
+// Generated with Claude Code
+// It is (deliberately crossed) and kept deliberately
+// ASSERTED IS DELIBERATELY KEPT HERE
+EOF
+	printf 'package pkg\nfunc TestA(t *testing.T) { want("ASSERTED IS DELIBERATELY KEPT HERE") }\n' > pkg/a_test.go
+	cat > run.sh << 'EOF'
+#!/bin/sh
+# ## Setup
+cat <<EOT
+# ---- heredoc text ----
+EOT
+#####################
+# It's worth noting that this runs twice.
+EOF
+	printf '#!/usr/bin/env bash\n# ---- section ----\necho hi\n' > tool
+	# shellcheck disable=SC2016 # Markdown fences, not command substitution
+	printf 'This is deliberately simple, **deliberately** so.\n\n```\ndeliberately in code\n```\n' > docs/guide.md
+	printf '// ---- crlf ----\r\nint x;\r\n' > crlf.c
+	printf 'x = 1 # deliberately\n# ---- tail ----' > nonl.py
+	echo notes > CLAUDE.md
+	git add .
+	git commit -q -m "Add files"
+	out=$(cg fix --dry-run)
+	rc "$A fix --dry-run exits 0" 0 $?
+	check "$A fix --dry-run lists a file" "$out" "^  pkg/a.go: .*banner"
+	check "$A fix --dry-run names the AI file" "$out" "would untrack AI and notes files.*CLAUDE.md"
+	check "$A fix --dry-run changes nothing" "[$(git status --short)]" "^\[\]$"
+	out=$(cg fix)
+	check "$A fix reports what changed" "$out" "clean-guard fix: changed [0-9]+ file\(s\): .*banner"
+	check "$A fix reports the protected line" "$out" "pkg/a.go:27 \(a test has \"ASSERTED IS DELIBERATELY KEPT HERE\"\)"
+	check "$A fix ends with what's left" "$out" "^## Left for you: clean-guard scan --worktree --summary$"
+	a=$(cat pkg/a.go)
+	lacks "$A fix removes pure dividers" "$a" "^// -+$"
+	check "$A fix keeps the divided heading" "$a" "^// Fencing$"
+	check "$A fix drops a capitalised filler word and capitalises" "$a" "^// Skip the cache. The epoch is new\.$"
+	check "$A fix keeps lowercase when the phrase was lowercase" "$a" "^// zero: the rest stay unset$"
+	check "$A fix cuts a divider to its text" "$a" "^// Setup$"
+	check "$A fix strips a heading marker" "$a" "^// Why it lives here$"
+	check "$A fix leaves raw strings" "$a" "^// ---- raw string ----$"
+	check "$A fix cleans a trailing comment" "$a" "return s // this is inline$"
+	check "$A fix leaves a trailing comment after unbalanced quotes" "$a" "honestly odd"
+	check "$A fix reduces a block banner" "$a" "^/\*$"
+	check "$A fix keeps block text" "$a" "^ \* Block$"
+	check "$A fix closes the block" "$a" "^ \*/$"
+	check "$A fix leaves an ASCII arrow" "$a" "^// ------------->$"
+	lacks "$A fix removes a generated-with comment" "$a" "Generated with"
+	check "$A fix tidies around brackets" "$a" "^// It is \(crossed\) and kept$"
+	check "$A fix keeps a line a test asserts on" "$a" "ASSERTED IS DELIBERATELY KEPT HERE"
+	r=$(cat run.sh)
+	check "$A fix: shell heading" "$r" "^# Setup$"
+	check "$A fix leaves heredoc text" "$r" "^# ---- heredoc text ----$"
+	lacks "$A fix removes a hash divider" "$r" "^#####"
+	check "$A fix drops worth noting" "$r" "^# This runs twice\.$"
+	check "$A fix reads a shebang" "$(cat tool)" "^# section$"
+	d=$(cat docs/guide.md)
+	check "$A fix: doc filler" "$d" "^This is simple, \*\*deliberately\*\* so\.$"
+	check "$A fix leaves code fences" "$d" "^deliberately in code$"
+	check "$A fix keeps CRLF" "$(od -c crlf.c | head -n 1)" "c   r   l   f  \\\\r  \\\\n"
+	check "$A fix keeps a missing final newline" "$(tail -c 6 nonl.py)" "# tail$"
+	check "$A fix: trailing hash comment" "$(head -n 1 nonl.py)" "^x = 1 # deliberately$"
+	check "$A fix untracks the AI file" "$(git status --short CLAUDE.md)" "^D  CLAUDE.md"
+	check "$A fix keeps the AI file on disk" "$(cat CLAUDE.md)" "^notes$"
+	check "$A fix excludes the AI file" "$(cat .git/info/exclude)" "^/CLAUDE.md$"
+	git add -A
+	git commit -q -m "Tidy"
+	out=$(cg fix)
+	check "$A fix twice changes nothing" "$out" "nothing to change in the files"
+	printf '// Claude wrote this\n' >> pkg/a.go
+	out=$(cg scan --worktree)
+	rc "$A scan --worktree sees an unstaged edit" 1 $? "$out"
+	check "$A scan --worktree names the file" "$out" "BLOCK ai-name [0-9a-f]{7} add pkg/a.go:"
+	out=$(cg fix)
+	rc "$A fix exits 1 while blocks are left" 1 $? "$out"
+	git stash -q
+	cd "$WORK" || exit 1
+
+	newrepo "$WORK/fixh-$A"
+	git commit -q --allow-empty -m "Fix login
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+	echo p > plan.md
+	mkdir -p .claude
+	echo s > .claude/settings.json
+	echo code > app.js
+	git add plan.md .claude app.js
+	git commit -q -m "Add plan and app"
+	git rm -q plan.md
+	git commit -q -m "Drop plan"
+	git commit -q --allow-empty -m "Empty on purpose
+
+Generated with Claude Code"
+	c=$(printf 'Tail\n\nCo-Authored-By: Claude <noreply@anthropic.com>' | git commit-tree "HEAD^{tree}" -p HEAD)
+	git reset -q "$c"
+	old=$(git rev-parse HEAD)
+	out=$(cg fix --history --dry-run)
+	rc "$A fix --history --dry-run exits 0" 0 $?
+	check "$A fix --history --dry-run counts" "$out" "would rewrite main: 6 commit\(s\) read, 3 message\(s\) cleaned \(3 attribution line\(s\) cut\), 2 AI or notes path\(s\) dropped from 2 commit\(s\), 1 commit\(s\) left empty and dropped"
+	check "$A fix --history --dry-run leaves the branch" "$(git rev-parse HEAD)" "^$old$"
+	out=$(cg fix --history --to clean)
+	check "$A fix --history --to reports" "$out" "rewrote main into clean"
+	check "$A fix --history --to leaves the source" "$(git rev-parse main)" "^$old$"
+	msgs=$(git log --format='%B' clean)
+	lacks "$A fix --history cuts trailers" "$msgs" "Co-Authored-By|Generated with"
+	check "$A fix --history keeps the subject" "$msgs" "^Fix login$"
+	check "$A fix --history keeps a commit that was empty" "$msgs" "^Empty on purpose$"
+	check "$A fix --history drops a commit left empty" "$(git log --format=%s clean | tr '\n' ' ')" "^Tail Empty on purpose Add plan and app Fix login Initial commit $"
+	check "$A fix --history drops the paths" "[$(git log --format= --name-only clean | grep -E 'plan|claude')]" "^\[\]$"
+	check "$A fix --history keeps other files" "$(git show clean:app.js)" "^code$"
+	check "$A fix --history keeps dates" "$(git log -1 --format=%at clean)" "^$(git log -1 --format=%at main)$"
+	out=$(cg fix --history --to clean 2>&1)
+	rc "$A fix --history --to an existing branch exits 2" 2 $? "$out"
+	check "$A fix --history --to an existing branch says so" "$out" "branch clean already exists"
+	echo edit >> app.js
+	out=$(cg fix --history)
+	check "$A fix --history in place gives the same commits" "$(git rev-parse main)" "^$(git rev-parse clean)$"
+	check "$A fix --history in place prints the undo" "$out" "to undo: git update-ref refs/heads/main $old"
+	check "$A fix --history keeps unstaged edits" "$(git status --short app.js)" "^ M app.js"
+	check "$A fix --history keeps a dropped file on disk" "$(cat .claude/settings.json)" "^s$"
+	check "$A fix --history excludes it" "$(cat .git/info/exclude)" "^/.claude/settings.json$"
+	check "$A fix --history leaves no temp ref" "[$(git for-each-ref refs/clean-guard)]" "^\[\]$"
+	out=$(cg fix --history)
+	check "$A fix --history twice finds nothing" "$out" "no attribution lines or AI files in the 5 commit\(s\) of main"
+	out=$(cg fix --to x 2>&1)
+	rc "$A fix --to without --history exits 2" 2 $? "$out"
+	cd "$WORK" || exit 1
+}
+
+for a in ${TEST_AWKS:-awk mawk gawk}; do
+	command -v "$a" > /dev/null 2>&1 || continue
+	export CLEAN_GUARD_AWK="$a"
+	AWKNAME=$a
+	fix_tests
+done
+unset CLEAN_GUARD_AWK
+allows "$R5" Bash "clean-guard fix --history --to clean" "clean-guard fix"
+check "install-copy includes fix.awk" "$(ls "$DATA")" "fix.awk"
+
 # ---------------------------------------------------------------- /clean-guard:scan skill
 
 out=$(cd "$WORK/plain" && cg skill-scan)
@@ -682,6 +850,19 @@ out=$(cg skill-scan staged)
 check "skill-scan staged scans the index" "$out" "^## clean-guard scan --staged$"
 out=$(cg skill-scan 'HEAD~1..HEAD')
 check "skill-scan passes a range through" "$out" "BLOCK ai-name"
+printf '// ---- x ----\n' > a.js
+git add a.js
+git commit -q -m "Add a.js"
+out=$(cg skill-fix)
+rc "skill-fix exits 0" 0 $? "$out"
+check "skill-fix previews the files" "$out" "^## clean-guard fix --dry-run$"
+check "skill-fix shows what would change" "$out" "would change 1 file"
+check "skill-fix changes nothing" "$(cat a.js)" "^// ---- x ----$"
+out=$(cg skill-fix history --to clean)
+check "skill-fix history previews a rewrite" "$out" "^## clean-guard fix --history --to clean --dry-run$"
+lacks "skill-fix history creates no branch" "$(git branch)" "clean"
+out=$(cd "$WORK/plain" && cg skill-fix)
+check "skill-fix outside git says so" "$out" "Not inside a git repository"
 cd "$WORK" || exit 1
 
 # ---------------------------------------------------------------- summary
